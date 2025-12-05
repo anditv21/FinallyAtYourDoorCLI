@@ -1,4 +1,4 @@
-![Logo](assets/logo.png)
+<p align="center"><img src="assets/logo.png" alt="Logo"></p>
 
 A simple bot that automatically redirects Post.at shipments to your doorstep instead of distant pickup stations.
 
