@@ -278,7 +278,13 @@ def load_config(path: str | None = None) -> dict | None:
         return None
     try:
         with p.open('r', encoding='utf-8') as f:
-            return json.load(f)
+            cfg = json.load(f)
+            if cfg.get('password'):
+                try:
+                    cfg['password'] = base64.b64decode(cfg['password']).decode('utf-8')
+                except Exception:
+                    pass
+            return cfg
     except Exception:
         return None
 
@@ -294,7 +300,8 @@ def save_config(email: str, password: str, path: str | None = None) -> None:
                 data = json.load(f)
         except Exception:
             data = {}
-    data.update({"email": email, "password": password})
+    encoded_password = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+    data.update({"email": email, "password": encoded_password})
     with p.open('w', encoding='utf-8') as f:
         json.dump(data, f)
 
