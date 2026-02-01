@@ -81,13 +81,19 @@ async def check_and_redirect():
 
     print_success_message("Shipments fetched")
 
-    for sendung in shipments_data['pagedSendungen']['sendungen']:
-        if sendung['status'] != 'ZU':
-            sendungsnummer = sendung['activeIdentityCode']
+    paged = shipments_data.get('pagedSendungen') or {}
+    sendungen = paged.get('sendungen') or []
+    for sendung in sendungen:
+        if sendung.get('status') != 'ZU':
+            sendungsnummer = sendung.get('activeIdentityCode')
+            if not sendungsnummer:
+                print_failure_message("Missing activeIdentityCode, skipping shipment")
+                continue
             print_info_message(f"Processing {sendungsnummer}")
 
             # Check if place redirection is already selected
-            already_redirected = any(redir.get('place', {}).get('isSelected', False) for redir in sendung.get('packageRedirections', []))
+            package_redirs = sendung.get('packageRedirections') or []
+            already_redirected = any((redir.get('place') or {}).get('isSelected', False) for redir in package_redirs)
             if already_redirected:
                 continue
 
@@ -107,10 +113,12 @@ async def check_and_redirect():
                 print_failure_message(f"Failed to get redirections for {sendungsnummer}: {e}")
                 continue
 
-            if redir_data and redir_data.get('einzelsendung', {}).get('possibleRedirections', {}).get('abstellort'):
-
-                # set redirection
-                query_mut = {
+            if redir_data:
+                einzelsendung = redir_data.get('einzelsendung') or {}
+                possible_redirs = einzelsendung.get('possibleRedirections') or {}
+                if possible_redirs.get('abstellort'):
+                    # set redirection
+                    query_mut = {
                     "operationName": "RedirectShipmentPlace",
                     "variables": {
                         "redirectionRequest": {
