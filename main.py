@@ -129,19 +129,23 @@ async def check_and_redirect():
                     },
                     "query": "mutation RedirectShipmentPlace($redirectionRequest: PlaceRedirectionType!) { setPlaceRedirection(redirection: $redirectionRequest) }",
                     "extensions": {"clientLibrary": {"name": "apollo-kotlin", "version": "4.3.1"}}
-                }
+                    }
 
-                try:
-                    async with session.post(url, headers=headers, json=query_mut) as resp:
-                        mut_response = await resp.json()
-                        mut_data = mut_response.get('data') if isinstance(mut_response, dict) else None
+                    try:
+                        async with session.post(url, headers=headers, json=query_mut) as resp:
+                            mut_response = await resp.json()
+                            mut_data = mut_response.get('data') if isinstance(mut_response, dict) else None
 
-                    if mut_data:
-                        print_success_message(f"Redirected {sendungsnummer} to Vor_Wohnungstüre")
-                    else:
-                        print_failure_message(f"Failed to redirect {sendungsnummer}")
-                except Exception as e:
-                    print_failure_message(f"Error redirecting {sendungsnummer}: {e}")
+                        if mut_data:
+                            print_success_message(f"Redirected {sendungsnummer} to Vor_Wohnungstüre")
+                        else:
+                            print_failure_message(f"Failed to redirect {sendungsnummer}")
+                    except Exception as e:
+                        print_failure_message(f"Error redirecting {sendungsnummer}: {e}")
+                else:
+                    print_info_message(f"Redirection not yet available for {sendungsnummer}, shipment information may not be transmitted yet")
+            else:
+                print_info_message(f"No redirection data available for {sendungsnummer}, shipment information may not be transmitted yet")
 
 async def main():
     print_info_message("Starting shipment auto-redirect bot")
