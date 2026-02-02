@@ -52,13 +52,20 @@ async def check_and_redirect():
 
     # Get shipments
     async with session.post(url, headers=headers, json=query_shipments) as resp:
-      try:
-        response_data = json.loads(await resp.text())
-        shipments_data = response_data.get('data') if isinstance(response_data, dict) else None
-      except Exception as e:
-        print_failure_message(f"Failed to parse response: {e}")
+      text = await resp.text()
+      if not text or text.strip() == "":
+        print_info_message("Empty response body; shipment information may not be transmitted yet")
         shipments_data = None
         response_data = None
+      else:
+        try:
+          response_data = json.loads(text)
+          shipments_data = response_data.get('data') if isinstance(response_data, dict) else None
+        except Exception as e:
+          excerpt = text[:200].replace('\n', ' ')
+          print_info_message(f"Failed to parse response: {e}; response excerpt: {excerpt}")
+          shipments_data = None
+          response_data = None
 
     # If unauthorized or missing data, try refreshing token once
     if shipments_data is None or 'pagedSendungen' not in shipments_data:
@@ -76,7 +83,7 @@ async def check_and_redirect():
           return
 
     if not shipments_data or 'pagedSendungen' not in shipments_data:
-      print_failure_message("No data in response")
+      print_info_message("No data in response; shipment information may not be transmitted yet")
       return
 
     print_success_message("Shipments fetched")
@@ -106,12 +113,23 @@ async def check_and_redirect():
             }
 
             try:
-                async with session.post(url, headers=headers, json=query_redir) as resp:
-                    redir_response = await resp.json()
+              async with session.post(url, headers=headers, json=query_redir) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                  excerpt = text[:200].replace('\n', ' ')
+                  print_info_message(f"Failed to get redirections for {sendungsnummer}: status={resp.status}; response excerpt: {excerpt}")
+                  redir_data = None
+                else:
+                  try:
+                    redir_response = json.loads(text)
                     redir_data = redir_response.get('data') if isinstance(redir_response, dict) else None
+                  except Exception as e:
+                    excerpt = text[:200].replace('\n', ' ')
+                    print_info_message(f"Failed to parse redirections for {sendungsnummer}: {e}; response excerpt: {excerpt}")
+                    redir_data = None
             except Exception as e:
-                print_failure_message(f"Failed to get redirections for {sendungsnummer}: {e}")
-                continue
+              print_failure_message(f"Failed to get redirections for {sendungsnummer}: {e}")
+              continue
 
             if redir_data:
                 einzelsendung = redir_data.get('einzelsendung') or {}
