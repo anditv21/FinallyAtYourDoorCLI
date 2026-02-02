@@ -8,6 +8,9 @@ Post.at often claims you're never home and sends packages to pickup stations far
 
 You can set a preference to have them delivered to your door, but it only works if you do it for each shipment individually.
 
+Furthermore, it is not really clear when and for how long the redirecting option is available. 🤷‍♂️
+
+
 ## Features
 
 - Automatic shipment redirection
