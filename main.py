@@ -5,6 +5,7 @@ import aiohttp
 import asyncio
 import auth
 import json
+import sys
 from datetime import datetime
 from colorama import Fore, init
 
@@ -33,8 +34,10 @@ def print_info_message(text):
     print(f"[{time}] [{Fore.LIGHTCYAN_EX}INFO{Fore.RESET}] [ℹ️] {text}")
 
 async def check_and_redirect():
+  allow_prompt = sys.stdin.isatty()
+
   try:
-    token = await auth.get_token_auto_async(prompt=False, debug=False)
+    token = await auth.get_token_auto_async(prompt=allow_prompt, debug=False)
   except Exception as e:
     print_failure_message(f"Failed to get token: {e}")
     return
@@ -73,7 +76,7 @@ async def check_and_redirect():
 
       if status401:
         try:
-          token = await auth.get_token_auto_async(prompt=False, debug=False)
+          token = await auth.get_token_auto_async(prompt=allow_prompt, debug=False)
           headers = {**headers_template, "Authorization": f"Bearer {token}"}
           async with session.post(url, headers=headers, json=query_shipments) as resp2:
             response_data = await resp2.json()
@@ -168,13 +171,22 @@ async def check_and_redirect():
 async def main():
     print_info_message("Starting shipment auto-redirect bot")
 
-    while True:
-        try:
-            await check_and_redirect()
-        except Exception as e:
-            print_failure_message(f"Error in main loop: {e}")
+    try:
+        while True:
+            try:
+                await check_and_redirect()
+            except Exception as e:
+                print_failure_message(f"Error in main loop: {e}")
 
-        print_info_message("Waiting 10 minutes until next check...")
-        await asyncio.sleep(600)
+            print_info_message("Waiting 10 minutes until next check...")
+            await asyncio.sleep(600)
+    except asyncio.CancelledError:
+        # Raised during loop cancellation when shutting down under asyncio.run.
+        pass
 
-asyncio.run(main())
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print_info_message("Shutdown requested, exiting cleanly")

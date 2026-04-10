@@ -289,6 +289,13 @@ def load_config(path: str | None = None) -> dict | None:
         return None
 
 
+def build_missing_credentials_message(config_path: str) -> str:
+    return (
+        "No valid credentials in config and prompting disabled. "
+        f"Create/update config at {config_path} with email/password or a valid token/refresh_token."
+    )
+
+
 def save_config(email: str, password: str, path: str | None = None) -> None:
     if path is None:
         path = DEFAULT_CONFIG_PATH
@@ -433,7 +440,7 @@ def get_token_auto(config_path: str | None = None, prompt: bool = True, save: bo
             pass
 
     if not prompt:
-        raise RuntimeError("No valid credentials in config and prompting disabled")
+        raise RuntimeError(build_missing_credentials_message(config_path))
 
     try:
         email = input("Email: ").strip()
@@ -524,7 +531,7 @@ async def get_token_auto_async(config_path: str | None = None, prompt: bool = Tr
             pass
 
     if not prompt:
-        raise RuntimeError("No valid credentials in config and prompting disabled")
+        raise RuntimeError(build_missing_credentials_message(config_path))
 
     try:
         # input() and getpass are blocking; run them in thread to avoid blocking event loop
