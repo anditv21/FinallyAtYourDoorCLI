@@ -1,4 +1,3 @@
-import aiohttp
 import asyncio
 import re
 import html
@@ -11,17 +10,10 @@ import base64
 import os
 import random
 from pathlib import Path
+from curl_cffi.requests import AsyncSession
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
-
-# Realistic user agents for different devices
-USER_AGENTS = [
-    'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 9; G011A Build/PI) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.70 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 12; SM-S906N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Mobile Safari/537.36',
-]
 
 async def human_delay(min_ms: int = 800, max_ms: int = 2500):
     delay = random.uniform(min_ms / 1000, max_ms / 1000)
@@ -37,10 +29,9 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
     3. Follow through to get authorization code
     4. Exchange code for access_token
     """
-    # Create session with explicit cookie jar to ensure cookies work on Linux
-    jar = aiohttp.CookieJar(unsafe=True)
-    connector = aiohttp.TCPConnector(force_close=False, enable_cleanup_closed=True)
-    async with aiohttp.ClientSession(raise_for_status=False, cookie_jar=jar, connector=connector) as session:
+    # The Post login endpoint rejects aiohttp's TLS fingerprint with HTTP 400.
+    # Impersonate Chromium so the login and its cookies follow the browser flow.
+    async with AsyncSession(impersonate="chrome") as session:
 
         # Mobile app parameters
         tenant = "f098c632-5a55-45ba-9bf4-c13870157cf1"
@@ -52,8 +43,6 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
         # Generate PKCE challenge (simplified - using fixed values like the app)
         code_verifier = "FJQiaSFJ7U9gsRn-iZIXgh_maRMPr8-_NBkGyrLSJK0"
         code_challenge = "mcjbXmWvXOmZb_ipZAf37aP4d3QO6mJVjyk7HKnGL00"
-
-        user_agent = random.choice(USER_AGENTS)
 
         # Step 1: Start authorization
         import uuid
@@ -82,44 +71,27 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
 
         auth_url = f"https://login.post.at/{tenant}/{policy}/oauth2/v2.0/authorize"
         headers = {
-            'User-Agent': user_agent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'de-AT,de;q=0.9,en-US;q=0.8,en;q=0.7',
             'DNT': '1',
         }
 
-        async with session.get(auth_url, params=auth_params, headers=headers, allow_redirects=False) as r:
-            body = await r.text()
-            status = r.status
-            if debug:
-                print(f"[AUTH DEBUG] Step 1 - Authorization page status: {status}")
+        r = await session.get(auth_url, params=auth_params, headers=headers, allow_redirects=False)
+        body = r.text
+        if debug:
+            print(f"[AUTH DEBUG] Step 1 - Authorization page status: {r.status_code}")
 
-            # Check cookies
-            if debug:
-                cookies = session.cookie_jar.filter_cookies('https://login.post.at')
-                print(f"[AUTH DEBUG] Cookies after Step 1: {len(cookies)} cookies")
-                for name, cookie in cookies.items():
-                    print(f"[AUTH DEBUG]   Cookie: {name} = {cookie.value[:30] if len(cookie.value) > 30 else cookie.value}...")
+        tx_match = re.search(r'StateProperties=([^&"\']+)', body)
+        csrf_match = re.search(r'"csrf"\s*:\s*"([^"]+)"', body)
+        if not tx_match or not csrf_match:
+            raise RuntimeError("Could not extract tx or csrf_token from authorization page")
 
-            # Extract tx and csrf_token from the page
-            tx_match = re.search(r'StateProperties=([^&"\']+)', body)
-            csrf_match = re.search(r'"csrf"\s*:\s*"([^"]+)"', body)
-
-            if not tx_match or not csrf_match:
-                print(f"[AUTH DEBUG] Failed to extract tx or csrf from page")
-                print(f"[AUTH DEBUG] Page body preview: {body[:500]}")
-                raise RuntimeError("Could not extract tx or csrf_token from authorization page")
-
-            tx = tx_match.group(1)
-            csrf_token = csrf_match.group(1)
-            if debug:
-                print(f"[AUTH DEBUG] Extracted tx: {tx[:30]}...")
-                print(f"[AUTH DEBUG] Extracted csrf: {csrf_token[:30]}...")
-
-            # Store cookies from initial request
-            cookies_from_auth = session.cookie_jar
-            if debug:
-                print(f"[AUTH DEBUG] Total cookies in jar: {len(session.cookie_jar)}")
+        tx = tx_match.group(1)
+        csrf_token = csrf_match.group(1)
+        if debug:
+            # Never print cookie or CSRF values: both can authorize this session.
+            print("[AUTH DEBUG] Extracted transaction and CSRF token")
+            print(f"[AUTH DEBUG] Cookies after Step 1: {len(session.cookies)}")
 
         await human_delay(1500, 3500)
 
@@ -140,39 +112,30 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
             'Accept': 'application/json, text/javascript, */*; q=0.01',
             'Accept-Language': 'de-AT,de;q=0.9,en-US;q=0.8,en;q=0.7',
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'Origin': 'https://login.post.at',
             'X-CSRF-TOKEN': csrf_token,
             'X-Requested-With': 'XMLHttpRequest',
-            'User-Agent': user_agent,
-            'DNT': '1',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-origin',
             'Referer': auth_url + '?' + urllib.parse.urlencode(auth_params),
         }
 
         if debug:
             print(f"[AUTH DEBUG] Step 2 - Submitting credentials")
 
-        async with session.post(selfasserted_url, params=selfasserted_params, data=selfasserted_data, headers=selfasserted_headers) as r:
-            text = await r.text()
-            status_code = r.status
+        r = await session.post(selfasserted_url, params=selfasserted_params, data=selfasserted_data, headers=selfasserted_headers)
+        text = r.text
+        status_code = r.status_code
 
-            # If we get 400, log detailed info
-            if status_code == 400 and debug:
-                print(f"[AUTH DEBUG] SelfAsserted response status: {status_code}")
-                print(f"[AUTH DEBUG] Response: {text[:200]}")
-                print(f"[AUTH DEBUG] This might be IP rate limiting or bot detection")
+        if status_code == 400 and debug:
+            print(f"[AUTH DEBUG] SelfAsserted response status: {status_code}")
+            print(f"[AUTH DEBUG] Response: {text[:200]}")
 
-            try:
-                result = json.loads(text)
-            except Exception as e:
-                if debug:
-                    print(f"[AUTH DEBUG] Failed to parse JSON: {e}")
-                    print(f"[AUTH DEBUG] Response body: {text}")
-                raise RuntimeError(f"SelfAsserted response not JSON (status={status_code}): {text[:500]}")
-            if result.get('status') != '200':
-                raise RuntimeError(f"Login failed: {result}")
+        try:
+            result = json.loads(text)
+        except Exception as e:
+            if debug:
+                print(f"[AUTH DEBUG] Failed to parse JSON: {e}")
+            raise RuntimeError(f"SelfAsserted response not JSON (status={status_code}): {text[:500]}")
+        if result.get('status') != '200':
+            raise RuntimeError(f"Login failed: {result}")
 
         await human_delay(600, 1200)
 
@@ -188,31 +151,28 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
         }
 
         confirmed_headers = {
-            'User-Agent': user_agent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'de-AT,de;q=0.9,en-US;q=0.8,en;q=0.7',
-            'DNT': '1',
             'Referer': auth_url + '?' + urllib.parse.urlencode(auth_params),
         }
 
-        async with session.get(confirmed_url, params=confirmed_params, headers=confirmed_headers, allow_redirects=False) as r:
+        r = await session.get(confirmed_url, params=confirmed_params, headers=confirmed_headers, allow_redirects=False)
+        if debug:
+            print(f"[AUTH DEBUG] Confirmed endpoint status: {r.status_code}")
+        if r.status_code != 302:
             if debug:
-                print(f"[AUTH DEBUG] Confirmed endpoint status: {r.status}")
-            if r.status != 302:
-                body = await r.text()
-                if debug:
-                    print(f"[AUTH DEBUG] Expected redirect, got {r.status}")
-                    print(f"[AUTH DEBUG] Response: {body[:500]}")
-                raise RuntimeError(f"Expected redirect, got {r.status}")
+                print(f"[AUTH DEBUG] Expected redirect, got {r.status_code}")
+                print(f"[AUTH DEBUG] Response: {r.text[:500]}")
+            raise RuntimeError(f"Expected redirect, got {r.status_code}")
 
-            location = r.headers.get('Location', '')
+        location = r.headers.get('Location', '')
 
-            # Extract code from redirect: msal...://at.post.app/auth?state=...&code=...
-            code_match = re.search(r'[?&]code=([^&]+)', location)
-            if not code_match:
-                raise RuntimeError(f"No code in redirect: {location}")
+        # Extract code from redirect: msal...://at.post.app/auth?state=...&code=...
+        code_match = re.search(r'[?&]code=([^&]+)', location)
+        if not code_match:
+            raise RuntimeError("No authorization code in redirect")
 
-            code = urllib.parse.unquote(code_match.group(1))
+        code = urllib.parse.unquote(code_match.group(1))
 
         # Step 4: Exchange code for tokens
         if debug:
@@ -234,7 +194,6 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
 
         token_headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 9; G011A Build/PI)',
             'x-client-SKU': 'MSAL.Android',
             'x-client-Ver': '6.2.0',
             'x-client-CPU': 'x86_64',
@@ -245,25 +204,25 @@ async def get_token(email: str, password: str, debug: bool = False) -> tuple[str
             'x-app-ver': '2.8.0',
         }
 
-        async with session.post(token_url, data=token_data, headers=token_headers) as r:
-            result = await r.json()
+        r = await session.post(token_url, data=token_data, headers=token_headers)
+        result = r.json()
 
-            if 'error' in result:
-                if debug:
-                    print(f"[AUTH DEBUG] Token exchange error: {result}")
-                raise RuntimeError(f"Token exchange error: {result.get('error_description', result.get('error'))}")
-
-            access_token = result.get('access_token')
-            if not access_token:
-                if debug:
-                    print(f"[AUTH DEBUG] No access_token in response. Keys: {result.keys()}")
-                raise RuntimeError(f"No access_token in response: {result.keys()}")
-
-            refresh_token = result.get('refresh_token')
+        if 'error' in result:
             if debug:
-                print(f"[AUTH DEBUG] ✅ Tokens obtained successfully")
-                print(f"[AUTH DEBUG] Has refresh_token: {bool(refresh_token)}")
-            return access_token, refresh_token
+                print(f"[AUTH DEBUG] Token exchange error: {result.get('error')}")
+            raise RuntimeError(f"Token exchange error: {result.get('error_description', result.get('error'))}")
+
+        access_token = result.get('access_token')
+        if not access_token:
+            if debug:
+                print(f"[AUTH DEBUG] No access_token in response. Keys: {result.keys()}")
+            raise RuntimeError(f"No access_token in response: {result.keys()}")
+
+        refresh_token = result.get('refresh_token')
+        if debug:
+            print("[AUTH DEBUG] Tokens obtained successfully")
+            print(f"[AUTH DEBUG] Has refresh_token: {bool(refresh_token)}")
+        return access_token, refresh_token
 
 
 def get_token_sync(email: str, password: str) -> tuple[str, str | None]:
@@ -388,35 +347,34 @@ async def refresh_access_token(refresh_token: str, config_path: str | None = Non
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; G011A Build/PI)",
         "x-client-SKU": "MSAL.Android",
         "x-client-Ver": "6.2.0"
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(token_url, data=data, headers=headers) as r:
-            result = await r.json()
+    async with AsyncSession(impersonate="chrome") as session:
+        r = await session.post(token_url, data=data, headers=headers)
+        result = r.json()
 
-            if "error" in result:
-                raise RuntimeError(f"Refresh failed: {result.get('error_description', result.get('error'))}")
+        if "error" in result:
+            raise RuntimeError(f"Refresh failed: {result.get('error_description', result.get('error'))}")
 
-            if "access_token" not in result:
-                raise RuntimeError(f"No access_token in refresh response: {result.keys()}")
+        if "access_token" not in result:
+            raise RuntimeError(f"No access_token in refresh response: {result.keys()}")
 
-            new_access = result["access_token"]
-            new_refresh = result.get("refresh_token", refresh_token)
+        new_access = result["access_token"]
+        new_refresh = result.get("refresh_token", refresh_token)
 
-            # Save both tokens
-            cfg = load_config(config_path) or {}
-            cfg["token"] = new_access
-            cfg["token_exp"] = get_token_expiry(new_access)
-            cfg["refresh_token"] = new_refresh
+        # Save both tokens
+        cfg = load_config(config_path) or {}
+        cfg["token"] = new_access
+        cfg["token_exp"] = get_token_expiry(new_access)
+        cfg["refresh_token"] = new_refresh
 
-            p = Path(config_path)
-            with p.open('w', encoding='utf-8') as f:
-                json.dump(cfg, f)
+        p = Path(config_path)
+        with p.open('w', encoding='utf-8') as f:
+            json.dump(cfg, f)
 
-            return new_access
+        return new_access
 
 
 def get_token_auto(config_path: str | None = None, prompt: bool = True, save: bool = True) -> str:
@@ -527,8 +485,11 @@ async def get_token_auto_async(config_path: str | None = None, prompt: bool = Tr
         except Exception as e:
             if debug:
                 print(f"[AUTH DEBUG] ❌ Full login failed: {e}")
-
-            pass
+            # In unattended mode, keep the real, non-secret OAuth error. The old
+            # fallback below incorrectly reported that configured credentials
+            # were missing even when the server had rejected the login request.
+            if not prompt:
+                raise RuntimeError(f"OAuth login failed: {e}") from e
 
     if not prompt:
         raise RuntimeError(build_missing_credentials_message(config_path))
